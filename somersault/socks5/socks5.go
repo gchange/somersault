@@ -2,6 +2,8 @@ package socks5
 
 import (
 	"encoding/binary"
+	"fmt"
+	"io"
 	"net"
 )
 
@@ -9,6 +11,7 @@ type Socks5 struct {
 	Command string
 	Conn net.Conn
 	Method uint8
+	RemoteConn net.Conn
 }
 
 func (s *Socks5) Handshake() error {
@@ -76,14 +79,14 @@ func (s *Socks5) AuthReply() error {
 	return f(s.Conn)
 }
 
-func (s *Socks5) Connect() error {
+func (s *Socks5) Connect(dstAddress string, dstPort int) error {
 	req := connectRequest{
 		Version: socksVersion,
 		Reverse: 0,
 	}
-	address := connectAddress{
-		0,
-		"",
+	remoteAddress := connectAddress{
+		Length: uint8(len(dst)),
+		Address: dst,
 	}
 	var port uint16 = 0
 	switch s.Command {
@@ -102,7 +105,7 @@ func (s *Socks5) Connect() error {
 	if err != nil {
 		return err
 	}
-	err = binary.Write(s.Conn, binary.BigEndian, &address)
+	err = binary.Write(s.Conn, binary.BigEndian, &remoteAddress)
 	if err != nil {
 		return err
 	}
@@ -131,6 +134,27 @@ func (s *Socks5) ConnectReply() error {
 	var port uint16 = 0
 	switch req.Command {
 	case 1:
+		remoteAddress := connectAddress{}
+		err := binary.Read(s.Conn, binary.BigEndian, &remoteAddress.Length)
+		if err != nil {
+			return err
+		}
+		buf := make([]byte, remoteAddress.Length)
+		_, err = io.ReadFull(s.Conn, buf)
+		if err != nil {
+			return err
+		}
+		remoteAddress.Address = string(buf)
+		var remotePort uint16 = 0
+		err = binary.Read(s.Conn, binary.BigEndian, &remotePort)
+		if err != nil {
+			return err
+		}
+		addr := fmt.Sprintf("%s:%d", remoteAddress.Address, remotePort)
+		s.RemoteConn, err = net.Dial("tcp", addr)
+		if err != nil {
+			return err
+		}
 	case 2:
 		return UnsupportedCommand
 	case 3:
@@ -146,5 +170,16 @@ func (s *Socks5) ConnectReply() error {
 	if err != nil {
 		return err
 	}
-	return binary.Write(s.Conn, binary.BigEndian, &port)
+	err = binary.Write(s.Conn, binary.BigEndian, &port)
+	if err != nil {
+		return err
+	}
+
+	go s.Transport()
+}
+
+func (s *Socks5) Transport() error {
+	for {
+		io.Copy(s.Conn, s.RemoteConn)
+	}
 }
