@@ -11,7 +11,7 @@ var (
 	authMethodLock = sync.RWMutex{}
 )
 
-func registerAuthMethod(method uint8, f func(conn net.Conn) error) error {
+func registeAuthMethod(method uint8, f func(conn net.Conn) error) error {
 	authMethodLock.Lock()
 	defer authMethodLock.Unlock()
 	if _, ok := authMethods[method]; ok {
@@ -37,15 +37,17 @@ func getSupportAuthMethod() []uint8 {
 	for method := range authMethods {
 		methods = append(methods, method)
 	}
+	return methods
 }
 
-func registerAuthReplyMethod(method uint8, f func(conn net.Conn) error) error {
+func registeAuthReplyMethod(method uint8, f func(conn net.Conn) error) error {
 	authMethodLock.Lock()
 	defer authMethodLock.Unlock()
 	if _, ok := authReplyMethods[method]; ok {
 		return DuplicateAuthMethod
 	}
 	authReplyMethods[method] = f
+	return nil
 }
 
 func getAuthReplyMethod(method uint8) func(conn net.Conn) error {
@@ -62,6 +64,6 @@ func noAuth(_ net.Conn) error {
 }
 
 func init() {
-	registerAuthMethod(0, noAuth)
-	registerAuthReplyMethod(0, noAuth)
+	registeAuthMethod(0, noAuth)
+	registeAuthReplyMethod(0, noAuth)
 }

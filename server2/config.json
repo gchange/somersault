@@ -1,0 +1,8 @@
+{
+  "server": {
+    "protocol": "socks5",
+    "command": "tcp",
+    "method": 0,
+    "port": 11223
+  }
+}
