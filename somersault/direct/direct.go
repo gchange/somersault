@@ -2,33 +2,31 @@ package direct
 
 import (
 	"errors"
-	"github.com/somersault/somersault/pipe"
+	"github.com/somersault/somersault/pipeline"
 	"sync"
 )
 
 type Config struct {
-	src pipe.Pipe
-	dst pipe.Pipe
 }
 
 type TCP struct {
 	*Config
+	input pipeline.Pipeline
+	output pipeline.Pipeline
 }
 
-func NewTCP(config interface{}) (pipe.Pipe, error) {
-	if config, ok := config.(Config); ok {
-		t := TCP{
-			&config,
-		}
-		go t.pipe()
-		return &t, nil
+func (c *Config) New() (pipeline.Pipeline, error) {
+	t := TCP{
+		c,
+		nil,
+		nil,
 	}
-	return nil, errors.New("unknown config")
+	go t.transport()
 }
 
-func (t *TCP) pipe() {
+func (t *TCP) transport() {
 	var wg sync.WaitGroup
-	f := func(src pipe.Pipe, dst pipe.Pipe) {
+	f := func(src pipeline.Pipeline, dst pipeline.Pipeline) {
 		defer dst.Close()
 		defer wg.Done()
 		for {
@@ -45,26 +43,42 @@ func (t *TCP) pipe() {
 	}
 
 	wg.Add(2)
-	f(t.src, t.dst)
-	f(t.dst, t.src)
+	f(t.input, t.output)
+	f(t.output, t.output)
 	wg.Wait()
 }
 
+func (t *TCP) SetInput(input pipeline.Pipeline) error {
+	if t.input != nil {
+		return errors.New("duplicate input")
+	}
+	t.input = input
+	return nil
+}
+
+func (t *TCP) SetOutput(output pipeline.Pipeline) error {
+	if t.output != nil {
+		return errors.New("duplicate output")
+	}
+	t.output = output
+	return nil
+}
+
 func (t *TCP) Read(buf []byte) (int, error) {
-	return t.src.Read(buf)
+	return t.input.Read(buf)
 }
 
 func (t *TCP) Write(buf []byte) (int, error) {
-	return t.src.Write(buf)
+	return t.input.Write(buf)
 }
 
 func (t *TCP) Close() error {
 	var srcErr, dstErr error
-	if t.src != nil {
-		srcErr = t.src.Close()
+	if t.input != nil {
+		srcErr = t.input.Close()
 	}
-	if t.dst != nil {
-		dstErr = t.dst.Close()
+	if t.output != nil {
+		dstErr = t.output.Close()
 	}
 	if srcErr != nil {
 		return srcErr
@@ -73,5 +87,6 @@ func (t *TCP) Close() error {
 }
 
 func init() {
-	pipe.RegistePipeCreator("tcp", NewTCP)
+	config := &Config{}
+	pipeline.RegistePipelineCreator("tcp", config)
 }

@@ -3,32 +3,16 @@ package somersault
 import (
 	"errors"
 	"fmt"
-	"image"
-	"image/jpeg"
+	"github.com/somersault/somersault/pipeline"
 	"log"
 	"net"
 
 	"github.com/somersault/somersault/socks5"
 )
 
-type ServerConfig struct {
-	Protocol string `json:"protocol"`
-	Command string `json:"command"`
-	Method uint8 `json:"method"`
-	Port int `json:"port"`
-}
-
-type ClientConfig struct {
-	Protocol string `json:"protocol"`
-	Command string `json:"command"`
-	Method uint8 `json:"method"`
-	Address string `json:"address"`
-	Port int `json:"port"`
-}
-
 type Config struct {
-	ServerConfig ServerConfig `json:"server"`
-	ClientConfig ClientConfig `json:"client"`
+	ServerConfig map[interface{}]interface{} `json:"server"`
+	ClientConfig map[interface{}]interface{} `json:"client"`
 }
 
 type Somerasult struct {
@@ -38,7 +22,6 @@ type Somerasult struct {
 }
 
 func (c *Config) New(logger log.Logger) (*Somerasult, error) {
-	jpeg.Decode()
 	s := Somerasult{
 		c,
 		logger,
@@ -58,19 +41,63 @@ func (c *Config) New(logger log.Logger) (*Somerasult, error) {
 }
 
 func (s *Somerasult) createServer() error {
-	if s.ServerConfig.Port == 0 {
+	port, ok := getIntFromMap(s.ServerConfig, "listen")
+	if !ok || port <= 0 {
 		return nil
 	}
 
-	s.logger.Printf("create server %v\n", s.ServerConfig)
-	addr := fmt.Sprintf(":%d", s.ServerConfig.Port)
-	listener, err := net.Listen("tcp", addr)
+	address, ok := getStringFromMap(s.ServerConfig, "address")
+	if !ok {
+		address = ""
+	}
+
+	protocol, ok := getStringFromMap(s.ServerConfig, "protocol")
+	if !ok {
+		protocol = "tcp"
+	}
+
+	ps, ok := s.ServerConfig["pipeline"]
+	if !ok {
+		return nil
+	}
+	pcs, ok := ps.([]map[string]interface{})
+	if !ok {
+		return nil
+	}
+	if len(pcs) == 0 {
+		return errors.New("pipeline not config")
+	}
+
+	addr := fmt.Sprintf("%s:%d", address, port)
+	s.logger.Printf("create server listen %s\n", addr)
+	defer s.logger.Printf("close server on %s\n", addr)
+	listener, err := net.Listen(protocol, addr)
 	if err != nil {
 		s.logger.Println(err)
 		return err
 	}
-	s.logger.Printf("%v %s %v", listener, addr, listener.Addr())
 	s.listener = listener
+
+	chain := make([]pipeline.Pipeline, len(pcs))
+	for i, p := range pcs {
+		protocol, _ := getStringFromMap(p, "protocol")
+		config, _ := p["config"]
+		c, err := pipeline.GetPipelineCreator(protocol, config)
+		if err != nil {
+			return err
+		}
+		chain = append(chain, c)
+	}
+
+	go func() {
+		for {
+			conn, err := s.listener.Accept()
+			if err != nil {
+				continue
+			}
+
+		}
+	}()
 
 	switch s.ServerConfig.Protocol {
 	case "socks5":

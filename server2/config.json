@@ -1,8 +1,15 @@
 {
-  "server": {
-    "protocol": "socks5",
-    "command": "tcp",
-    "method": 0,
-    "port": 11223
-  }
+  "server": [
+    {
+      "protocol": "tcp",
+      "address": "0.0.0.0",
+      "listen": 11223,
+      "pipeline": [
+        {
+          "protocol": "echo",
+          "config": {}
+        }
+      ]
+    }
+  ],
 }
