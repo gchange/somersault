@@ -1,10 +1,12 @@
 package socks5
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/somersault/somersault"
+	"github.com/somersault/somersault/pipeline"
 	"io"
 	"log"
 	"net"
@@ -12,15 +14,19 @@ import (
 )
 
 type Config struct {
-	Command string
-	Dialer somersault.Dialer
+	Command string `somersault:"command"`
 }
 
 type Socks5 struct {
 	*Config
-	Conn net.Conn
-	Method uint8
-	RemoteConn net.Conn
+	*pipeline.DefaultPipeline
+}
+
+func (c *Config) New(ctx context.Context, input, output pipeline.Pipeline) (pipeline.Pipeline, error) {
+	if input == nil {
+		return nil, errors.New("input not found")
+	}
+
 }
 
 func New(config interface{}) (*Socks5, error) {

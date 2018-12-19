@@ -25,6 +25,35 @@
           }
         }
       ]
+    },
+    {
+      "network": "tcp",
+      "address": "0.0.0.0",
+      "port": 11225,
+      "pipeline": [
+        {
+          "protocol": "socks5",
+          "config": {
+            "command": "connect"
+          }
+        }
+      ]
+    },
+    {
+      "network": "tcp",
+      "address": "0.0.0.0",
+      "port": 11226,
+      "pipeline": [
+        {
+          "protocol": "socks5",
+          "config": {
+            "command": "connect",
+            "network": "tcp",
+            "address": "0.0.0.0",
+            "port": 11226
+          }
+        }
+      ]
     }
   ]
 }
