@@ -1,168 +1,141 @@
 package somersault
 
 import (
-	"errors"
+	"context"
 	"fmt"
-	"github.com/somersault/somersault/pipeline"
 	"log"
 	"net"
+	"reflect"
 
-	"github.com/somersault/somersault/socks5"
+	"github.com/somersault/somersault/pipeline"
 )
 
 type Config struct {
-	ServerConfig map[interface{}]interface{} `json:"server"`
-	ClientConfig map[interface{}]interface{} `json:"client"`
+	Config []map[string]interface{} `json:"config"`
 }
 
 type Somerasult struct {
 	*Config
 	logger log.Logger
-	listener net.Listener
 }
 
 func (c *Config) New(logger log.Logger) (*Somerasult, error) {
 	s := Somerasult{
 		c,
 		logger,
-		nil,
 	}
-	err := s.createServer()
-	if err != nil {
-		s.Close()
-		return nil, err
-	}
-	err = s.createClient()
-	if err != nil {
-		s.Close()
-		return nil, err
+	s.logger.Println(c.Config, c)
+	for _, config := range c.Config {
+		err := s.init(config)
+		if err != nil {
+			s.Close()
+			return nil, err
+		}
 	}
 	return &s, nil
 }
 
-func (s *Somerasult) createServer() error {
-	port, ok := getIntFromMap(s.ServerConfig, "listen")
-	if !ok || port <= 0 {
-		return nil
-	}
-
-	address, ok := getStringFromMap(s.ServerConfig, "address")
-	if !ok {
-		address = ""
-	}
-
-	protocol, ok := getStringFromMap(s.ServerConfig, "protocol")
+func (s *Somerasult) parseBaseConfig(m map[string]interface{}) (string, string, int) {
+	protocol, ok := getStringFromMap(m, "network")
 	if !ok {
 		protocol = "tcp"
 	}
 
-	ps, ok := s.ServerConfig["pipeline"]
+	address, ok := getStringFromMap(m, "address")
+	if !ok {
+		address = ""
+	}
+
+	port, ok := getIntFromMap(m, "port")
+	if !ok {
+		port = 0
+	}
+	return protocol, address, port
+}
+
+func (s *Somerasult) parseChainConfig(m map[string]interface{}) []pipeline.Config {
+	ps, ok := m["pipeline"]
 	if !ok {
 		return nil
 	}
-	pcs, ok := ps.([]map[string]interface{})
+	pcs, ok := ps.([]interface{})
 	if !ok {
 		return nil
 	}
 	if len(pcs) == 0 {
-		return errors.New("pipeline not config")
+		return nil
+	}
+
+	chain := make([]pipeline.Config, len(pcs))
+	for i, p := range pcs {
+		s.logger.Println(reflect.TypeOf(p))
+		p, ok := p.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		protocol, _ := getStringFromMap(p, "protocol")
+		config, ok := p["config"]
+		s.logger.Println(config, ok)
+		if !ok {
+			return nil
+		}
+		cs, ok := config.(map[string]interface{})
+		s.logger.Println(cs, ok)
+		if !ok {
+			return nil
+		}
+		c, err := pipeline.GetPipelineCreator(protocol, cs)
+		s.logger.Println(c, err)
+		if err != nil {
+			return nil
+		}
+		chain[i] = c
+	}
+	return chain
+}
+
+func (s *Somerasult) init(config map[string]interface{}) error {
+	network, address, port := s.parseBaseConfig(config)
+	s.logger.Println(network, address, port)
+	if network == "" || address == "" || port == 0 {
+		return nil
+	}
+
+	chain := s.parseChainConfig(config)
+	s.logger.Println(chain, config)
+	if chain == nil {
+		return nil
 	}
 
 	addr := fmt.Sprintf("%s:%d", address, port)
 	s.logger.Printf("create server listen %s\n", addr)
-	defer s.logger.Printf("close server on %s\n", addr)
-	listener, err := net.Listen(protocol, addr)
+	listener, err := net.Listen(network, addr)
 	if err != nil {
 		s.logger.Println(err)
 		return err
 	}
-	s.listener = listener
 
-	chain := make([]pipeline.Pipeline, len(pcs))
-	for i, p := range pcs {
-		protocol, _ := getStringFromMap(p, "protocol")
-		config, _ := p["config"]
-		c, err := pipeline.GetPipelineCreator(protocol, config)
-		if err != nil {
-			return err
-		}
-		chain = append(chain, c)
-	}
-
+	var input pipeline.Pipeline
+	ctx := context.Background()
 	go func() {
+		defer s.logger.Printf("close server on %s\n", addr)
 		for {
-			conn, err := s.listener.Accept()
+			conn, err := listener.Accept()
 			if err != nil {
 				continue
 			}
-
-		}
-	}()
-
-	switch s.ServerConfig.Protocol {
-	case "socks5":
-		go func() {
-			config := socks5.Config{
-				Command: "connect",
-				Dialer: net.Dialer{},
-			}
-			for {
-				conn, err := s.listener.Accept()
+			input = conn
+			for _, c := range chain {
+				input, err = c.New(ctx, input, nil)
+				s.logger.Println(c, conn, input, err)
 				if err != nil {
 					continue
 				}
-				s.logger.Printf("connect %v", conn)
-				config := socks5.Config{
-
-				}
-				socks := socks5.Socks5{
-					Conn:conn,
-					Command: "connect",
-					Method: 0,
-					Dialer: net.Dialer{},
-				}
-				go socks.Service()
 			}
-		}()
-		return nil
-	default:
-		return errors.New("Unsupported protocol ")
-	}
-}
-
-func (s *Somerasult) createClient() error {
-	if s.ClientConfig.Address == "" {
-		return nil
-	}
-
-	s.logger.Printf("create client %v\n", s.ClientConfig)
-
-	switch s.ClientConfig.Protocol {
-	case "socks5":
-		addr := fmt.Sprintf("%s:%d", s.ClientConfig.Address, s.ClientConfig.Port)
-		conn, err := net.Dial("tcp", addr)
-		if err != nil {
-			return err
 		}
-		socks := socks5.Socks5{
-			Conn:conn,
-			Command: "connect",
-			Method: 0,
-			Dialer: ProxyDialer{
-				ServerAddress: s.ClientConfig.Address,
-			Protocol: s.ClientConfig.Protocol,
-		},
-		}
-		go socks.Service()
-	default:
-		return errors.New("Unsupported protocol ")
-	}
-
+	}()
 	return nil
 }
 
 func (s *Somerasult) Close() {
-	if s.listener != nil {
-		s.listener.Close()
-	}
 }

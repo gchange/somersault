@@ -3,12 +3,16 @@ package main
 import (
 	"encoding/json"
 	"flag"
-	"github.com/somersault/somersault"
 	"io/ioutil"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/somersault/somersault"
+
+	_ "github.com/somersault/somersault/direct"
+	_ "github.com/somersault/somersault/echo"
 )
 
 func main() {

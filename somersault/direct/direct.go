@@ -1,92 +1,55 @@
 package direct
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net"
+
 	"github.com/somersault/somersault/pipeline"
-	"sync"
 )
 
 type Config struct {
+	Network string `somersault:"network"`
+	Address string `somersault:"address"`
+	Port int `somersault:"port"`
 }
 
 type TCP struct {
 	*Config
-	input pipeline.Pipeline
-	output pipeline.Pipeline
+	*pipeline.DefaultPipeline
 }
 
-func (c *Config) New() (pipeline.Pipeline, error) {
-	t := TCP{
+func (c *Config) New(ctx context.Context, input, output pipeline.Pipeline) (pipeline.Pipeline, error) {
+	if c.Network == "" || c.Port == 0 {
+		fmt.Println(c)
+		return nil, errors.New("remote address format error")
+	}
+	addr := fmt.Sprintf("%s:%d", c.Address, c.Port)
+	conn, err := net.Dial(c.Network, addr)
+	fmt.Println(conn, err)
+	if err != nil {
+		return nil, err
+	}
+
+	dp, err := pipeline.NewDefaultPipeline(ctx, input, conn)
+	if err != nil {
+		return nil, err
+	}
+
+	t := &TCP{
 		c,
-		nil,
-		nil,
+		dp,
 	}
-	go t.transport()
-}
-
-func (t *TCP) transport() {
-	var wg sync.WaitGroup
-	f := func(src pipeline.Pipeline, dst pipeline.Pipeline) {
-		defer dst.Close()
-		defer wg.Done()
-		for {
-			buf := make([]byte, 1024)
-			n, err := src.Read(buf)
-			if err != nil {
-				break
-			}
-			_, err = dst.Write(buf[0:n])
-			if err != nil {
-				src.Close()
-			}
-		}
-	}
-
-	wg.Add(2)
-	f(t.input, t.output)
-	f(t.output, t.output)
-	wg.Wait()
-}
-
-func (t *TCP) SetInput(input pipeline.Pipeline) error {
-	if t.input != nil {
-		return errors.New("duplicate input")
-	}
-	t.input = input
-	return nil
-}
-
-func (t *TCP) SetOutput(output pipeline.Pipeline) error {
-	if t.output != nil {
-		return errors.New("duplicate output")
-	}
-	t.output = output
-	return nil
-}
-
-func (t *TCP) Read(buf []byte) (int, error) {
-	return t.input.Read(buf)
-}
-
-func (t *TCP) Write(buf []byte) (int, error) {
-	return t.input.Write(buf)
-}
-
-func (t *TCP) Close() error {
-	var srcErr, dstErr error
-	if t.input != nil {
-		srcErr = t.input.Close()
-	}
-	if t.output != nil {
-		dstErr = t.output.Close()
-	}
-	if srcErr != nil {
-		return srcErr
-	}
-	return dstErr
+	go t.Transport()
+	return t, nil
 }
 
 func init() {
-	config := &Config{}
+	config := &Config{
+		Network: "tcp",
+		Address: "0.0.0.0",
+		Port: 0,
+	}
 	pipeline.RegistePipelineCreator("tcp", config)
 }

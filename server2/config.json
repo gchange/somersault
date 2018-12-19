@@ -1,15 +1,30 @@
 {
-  "server": [
+  "config": [
     {
-      "protocol": "tcp",
+      "network": "tcp",
       "address": "0.0.0.0",
-      "listen": 11223,
+      "port": 11223,
       "pipeline": [
         {
           "protocol": "echo",
           "config": {}
         }
       ]
+    },
+    {
+      "network": "tcp",
+      "address": "0.0.0.0",
+      "port": 11224,
+      "pipeline": [
+        {
+          "protocol": "tcp",
+          "config": {
+            "network": "tcp",
+            "address": "0.0.0.0",
+            "port": 11223
+          }
+        }
+      ]
     }
-  ],
+  ]
 }
