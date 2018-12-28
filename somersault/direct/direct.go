@@ -6,18 +6,26 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/somersault/somersault/pipeline"
+	"github.com/gchange/somersault/somersault/pipeline"
 )
 
 type Config struct {
 	Network string `somersault:"network"`
 	Address string `somersault:"address"`
-	Port int `somersault:"port"`
+	Port    int    `somersault:"port"`
 }
 
 type TCP struct {
 	*Config
 	*pipeline.DefaultPipeline
+}
+
+func (c *Config) DeepCopy() pipeline.Config {
+	return &Config{
+		Network: c.Network,
+		Address: c.Address,
+		Port:    c.Port,
+	}
 }
 
 func (c *Config) New(ctx context.Context, input, output pipeline.Pipeline) (pipeline.Pipeline, error) {
@@ -49,7 +57,7 @@ func init() {
 	config := &Config{
 		Network: "tcp",
 		Address: "0.0.0.0",
-		Port: 0,
+		Port:    0,
 	}
 	pipeline.RegistePipelineCreator("tcp", config)
 }

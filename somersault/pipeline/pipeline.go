@@ -13,7 +13,7 @@ import (
 
 var (
 	pipelineCreatorMap = make(map[string]Config)
-	pipelineLock = sync.RWMutex{}
+	pipelineLock       = sync.RWMutex{}
 )
 
 type Error struct {
@@ -41,6 +41,7 @@ func (e *Error) Append(err error) {
 
 type Config interface {
 	New(ctx context.Context, input, output Pipeline) (Pipeline, error)
+	DeepCopy() Config
 }
 
 type Pipeline interface {
@@ -50,9 +51,9 @@ type Pipeline interface {
 }
 
 type DefaultPipeline struct {
-	input Pipeline
+	input  Pipeline
 	output Pipeline
-	ctx context.Context
+	ctx    context.Context
 	cancel context.CancelFunc
 }
 
@@ -69,9 +70,9 @@ func NewDefaultPipeline(ctx context.Context, input, output Pipeline) (*DefaultPi
 		cancel()
 	}
 	dp := &DefaultPipeline{
-		input: input,
+		input:  input,
 		output: output,
-		ctx: ctx,
+		ctx:    ctx,
 		cancel: c,
 	}
 	return dp, nil
@@ -255,7 +256,7 @@ func GetPipelineCreator(name string, config map[string]interface{}) (Config, err
 	defer pipelineLock.RUnlock()
 	fmt.Println("pipeconfig", config)
 	if c, ok := pipelineCreatorMap[name]; ok {
-		nc := c // copy default config
+		nc := c.DeepCopy()
 		v := reflect.Indirect(reflect.ValueOf(nc))
 		t := v.Type()
 		for i := 0; i < v.NumField(); i++ {

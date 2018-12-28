@@ -7,7 +7,7 @@ import (
 	"net"
 	"reflect"
 
-	"github.com/somersault/somersault/pipeline"
+	"github.com/gchange/somersault/somersault/pipeline"
 )
 
 type Config struct {
@@ -16,10 +16,10 @@ type Config struct {
 
 type Somerasult struct {
 	*Config
-	logger log.Logger
+	logger *log.Logger
 }
 
-func (c *Config) New(logger log.Logger) (*Somerasult, error) {
+func (c *Config) New(logger *log.Logger) (*Somerasult, error) {
 	s := Somerasult{
 		c,
 		logger,
@@ -121,14 +121,17 @@ func (s *Somerasult) init(config map[string]interface{}) error {
 		defer s.logger.Printf("close server on %s\n", addr)
 		for {
 			conn, err := listener.Accept()
+			s.logger.Println(conn, err, chain)
 			if err != nil {
 				continue
 			}
 			input = conn
 			for _, c := range chain {
+				s.logger.Println(c)
 				input, err = c.New(ctx, input, nil)
 				s.logger.Println(c, conn, input, err)
 				if err != nil {
+					conn.Close()
 					continue
 				}
 			}

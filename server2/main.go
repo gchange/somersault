@@ -9,10 +9,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/somersault/somersault"
+	"github.com/gchange/somersault/somersault"
 
-	_ "github.com/somersault/somersault/direct"
-	_ "github.com/somersault/somersault/echo"
+	_ "github.com/gchange/somersault/somersault/direct"
+	_ "github.com/gchange/somersault/somersault/echo"
+	_ "github.com/gchange/somersault/somersault/socks5"
 )
 
 func main() {
@@ -30,7 +31,7 @@ func main() {
 	}
 
 	logger := log.New(os.Stdout, "somersault", log.Lshortfile|log.LstdFlags)
-	srv, err := config.New(*logger)
+	srv, err := config.New(logger)
 	if err != nil {
 		log.Fatal(err)
 	}

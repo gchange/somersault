@@ -5,16 +5,19 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/somersault/somersault"
-	"github.com/somersault/somersault/pipeline"
 	"io"
 	"log"
 	"net"
-	"sync"
+
+	"github.com/gchange/somersault/somersault/pipeline"
 )
 
 type Config struct {
 	Command string `somersault:"command"`
+	Network string `somersault:"network"`
+	Address string `somersault:"address"`
+	Port    uint16 `somersault:"port"`
+	Reverse uint8
 }
 
 type Socks5 struct {
@@ -22,43 +25,94 @@ type Socks5 struct {
 	*pipeline.DefaultPipeline
 }
 
+func (c *Config) DeepCopy() pipeline.Config {
+	return &Config{
+		Command: c.Command,
+		Network: c.Network,
+		Address: c.Address,
+		Port:    c.Port,
+		Reverse: c.Reverse,
+	}
+}
+
 func (c *Config) New(ctx context.Context, input, output pipeline.Pipeline) (pipeline.Pipeline, error) {
 	if input == nil {
 		return nil, errors.New("input not found")
 	}
-
-}
-
-func New(config interface{}) (*Socks5, error) {
-	if c, ok := config.(Config); ok {
-		return &Socks5{
-			&c,
-			nil,
-			nil,
-			nil,
-		}, nil
+	output, err := c.HandshakeReply(input)
+	fmt.Println(output, err)
+	if err != nil {
+		return nil, err
 	}
-	return nil, errors.New("unknown config")
+	dp, err := pipeline.NewDefaultPipeline(ctx, input, output)
+	if err != nil {
+		return nil, err
+	}
+	s := &Socks5{
+		c,
+		dp,
+	}
+	go s.Transport()
+	return s, nil
 }
 
-func (s *Socks5) Handshake() error {
+func (c *Config) Connect(command uint8, address string, port uint16) (net.Conn, error) {
+	fmt.Println(command, address, port, "server info", c.Address, c.Port)
+	if c.Address != "" && c.Port != 0 {
+		return c.ConnectToServer(command, address, port)
+	}
+	network := ""
+	switch command {
+	case 1:
+		network = "tcp"
+	case 2:
+		return nil, UnsupportedCommand
+	case 3:
+		network = "udp"
+	default:
+		return nil, UnsupportedCommand
+	}
+	addr := fmt.Sprintf("%s:%d", address, port)
+	fmt.Println(addr)
+	conn, err := net.Dial(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
+
+func (c *Config) ConnectToServer(command uint8, address string, port uint16) (net.Conn, error) {
+	fmt.Println("connect to server", command, address, port)
+	addr := fmt.Sprintf("%s:%d", c.Address, c.Port)
+	conn, err := net.Dial(c.Network, addr)
+	if err != nil {
+		return nil, err
+	}
+	err = c.Handshake(conn, command, address, port)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
+
+func (c *Config) Handshake(input pipeline.Pipeline, command uint8, address string, port uint16) error {
 	methods := getSupportAuthMethod()
-	_, err := s.Conn.Write([]byte{socksVersion, uint8(len(methods))})
+	_, err := input.Write([]byte{socksVersion, uint8(len(methods))})
 	if err != nil {
 		return err
 	}
-	_, err = s.Conn.Write(methods)
+	_, err = input.Write(methods)
 	if err != nil {
 		return err
 	}
 
 	var version uint8
 	var method uint8
-	err = binary.Read(s.Conn, binary.BigEndian, &version)
+	err = binary.Read(input, binary.BigEndian, &version)
 	if err != nil {
 		return err
 	}
-	err = binary.Read(s.Conn, binary.BigEndian, &method)
+	err = binary.Read(input, binary.BigEndian, &method)
 	if err != nil {
 		return err
 	}
@@ -67,86 +121,59 @@ func (s *Socks5) Handshake() error {
 		return UnsupportedProtocol
 	}
 
-	s.Method = method
-	f := getAuthMethod(s.Method)
+	f := getAuthMethod(method)
 	if f == nil {
 		return UnsupportedAuthMethod
 	}
-	err = f(s.Conn)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *Socks5) HandshakeReply() error {
-	var version uint8
-	var nMethod uint8
-	err := binary.Read(s.Conn, binary.BigEndian, &version)
-	if err != nil {
-		return err
-	}
-	err = binary.Read(s.Conn, binary.BigEndian, &nMethod)
-	if err != nil {
-		return err
-	}
-	if !isValidVersion(version) {
-		return UnsupportedProtocol
-	}
-
-	methods := make([]byte, nMethod)
-	_, err = s.Conn.Read(methods)
-
-	s.Method = 0
-	_, err = s.Conn.Write([]byte{version, s.Method})
+	err = f(input)
 	if err != nil {
 		return err
 	}
 
-	f := getAuthReplyMethod(s.Method)
-	if f == nil {
-		return UnsupportedAuthMethod
-	}
-	return f(s.Conn)
-}
-
-func (s *Socks5) Connect(dstAddress string, dstPort int) error {
-	var command uint8 = 0
-	var reverse uint8 = 0
-	var addressType uint8 = 0
-	var port uint16 = 0
-
-	switch s.Command {
-	case "connect":
-		command = 1
-	case "bind":
-		return UnsupportedCommand
-	case "udp":
-		return UnsupportedCommand
-	default:
-		return UnsupportedCommand
-	}
-
-	_, err := s.Conn.Write([]byte{socksVersion, command, reverse, addressType, uint8(len(dstAddress))})
+	_, err = input.Write([]byte{socksVersion, command, c.Reverse})
 	if err != nil {
 		return err
 	}
-	_, err = s.Conn.Write([]byte(dstAddress))
+
+	addressType := addrTypeDomain
+	ip := net.ParseIP(address)
+	if ip := ip.To4(); ip != nil {
+		addressType := addrTypeIPv4
+		_, err = input.Write([]byte{uint8(addressType)})
+		if err != nil {
+			return err
+		}
+		_, err = input.Write(ip)
+	} else if ip := ip.To16(); ip != nil {
+		addressType := addrTypeIPv6
+		_, err = input.Write([]byte{uint8(addressType)})
+		if err != nil {
+			return err
+		}
+		_, err = input.Write(ip)
+	} else {
+		_, err = input.Write([]byte{uint8(addressType), uint8(len(address))})
+		if err != nil {
+			return err
+		}
+		_, err = input.Write([]byte(address))
+	}
 	if err != nil {
 		return err
 	}
-	err = binary.Write(s.Conn, binary.BigEndian, &port)
+
+	err = binary.Write(input, binary.BigEndian, &port)
 	if err != nil {
 		return err
 	}
 
 	resp := struct {
-		Version uint8
-		Response uint8
-		Reverse uint8
+		Version     uint8
+		Response    uint8
+		Reverse     uint8
 		AddressType uint8
 	}{}
-	err = binary.Read(s.Conn, binary.BigEndian, &resp)
+	err = binary.Read(input, binary.BigEndian, &resp)
 	if err != nil {
 		return err
 	}
@@ -163,7 +190,7 @@ func (s *Socks5) Connect(dstAddress string, dstPort int) error {
 	case addrTypeIPv6:
 		ipLen = net.IPv6len
 	case addrTypeDomain:
-		err = binary.Read(s.Conn, binary.BigEndian, &ipLen)
+		err = binary.Read(input, binary.BigEndian, &ipLen)
 		if err != nil {
 			return err
 		}
@@ -171,75 +198,118 @@ func (s *Socks5) Connect(dstAddress string, dstPort int) error {
 		return UnsupportedCommand
 	}
 	ipBuf := make([]byte, ipLen)
-	_, err = io.ReadFull(s.Conn, ipBuf)
+	_, err = io.ReadFull(input, ipBuf)
 	if err != nil {
 		return err
 	}
 	var remotePort uint16
-	err = binary.Read(s.Conn, binary.BigEndian, &remotePort)
+	err = binary.Read(input, binary.BigEndian, &remotePort)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (s *Socks5) ConnectReply() error {
+func (c *Config) HandshakeReply(input pipeline.Pipeline) (pipeline.Pipeline, error) {
+	var version uint8
+	var nMethod uint8
+	err := binary.Read(input, binary.BigEndian, &version)
+	if err != nil {
+		return nil, err
+	}
+	err = binary.Read(input, binary.BigEndian, &nMethod)
+	if err != nil {
+		return nil, err
+	}
+	if !isValidVersion(version) {
+		return nil, UnsupportedProtocol
+	}
+
+	methods := make([]byte, nMethod)
+	_, err = input.Read(methods)
+
+	fmt.Println(version, methods)
+	var method uint8 = 0
+	_, err = input.Write([]byte{version, method})
+	if err != nil {
+		return nil, err
+	}
+
+	f := getAuthReplyMethod(method)
+	if f == nil {
+		return nil, UnsupportedAuthMethod
+	}
+	err = f(input)
+	if err != nil {
+		return nil, err
+	}
+
 	req := struct {
-		Version uint8
-		Command uint8
-		Reverse uint8
+		Version     uint8
+		Command     uint8
+		Reverse     uint8
 		AddressType uint8
 	}{}
-	err := binary.Read(s.Conn, binary.BigEndian, &req)
+	err = binary.Read(input, binary.BigEndian, &req)
+	fmt.Println(req, err)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !isValidVersion(req.Version) {
-		 return UnsupportedProtocol
+		return nil, UnsupportedProtocol
 	}
 
-	var addrLen uint8
+	var remoteIP net.IP
+	remoteAddr := ""
 	switch req.AddressType {
 	case addrTypeIPv4:
-		addrLen = net.IPv4len
-	case addrTypeDomain:
-		err = binary.Read(s.Conn, binary.BigEndian, &addrLen)
+		remoteIP = make(net.IP, net.IPv4len)
+		_, err = io.ReadFull(input, remoteIP)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		remoteAddr = remoteIP.String()
+	case addrTypeDomain:
+		var addrLen uint8
+		err = binary.Read(input, binary.BigEndian, &addrLen)
+		fmt.Println("domain len", addrLen)
+		if err != nil {
+			return nil, err
+		}
+		remoteIP = make(net.IP, addrLen)
+		_, err = io.ReadFull(input, remoteIP)
+		if err != nil {
+			return nil, err
+		}
+		remoteAddr = string(remoteIP)
 	case addrTypeIPv6:
-		addrLen = net.IPv6len
+		remoteIP = make(net.IP, net.IPv6len)
+		_, err = io.ReadFull(input, remoteIP)
+		if err != nil {
+			return nil, err
+		}
+		remoteAddr = remoteIP.String()
 	default:
-		return UnknownAddrType
+		return nil, UnknownAddrType
 	}
-	remoteAddr := make([]byte, addrLen)
-	_, err = io.ReadFull(s.Conn, remoteAddr)
+	fmt.Println(remoteAddr, err)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var remotePort uint16
-	err = binary.Read(s.Conn, binary.BigEndian, &remotePort)
+	err = binary.Read(input, binary.BigEndian, &remotePort)
+	fmt.Println("remote port", remotePort, err)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	switch req.Command {
-	case 1:
-		addr := fmt.Sprintf("%s:%d", string(remoteAddr), remotePort)
-		log.Printf("remote %s\n", addr)
-		s.RemoteConn, err = s.Dialer.Dial("tcp", addr)
-		if err != nil {
-			return err
-		}
-	case 2:
-		return UnsupportedCommand
-	case 3:
-		return UnsupportedCommand
-	default:
-		return UnsupportedCommand
+	conn, err := c.Connect(req.Command, string(remoteAddr), remotePort)
+	fmt.Println(conn, err)
+	if err != nil {
+		return nil, err
 	}
 
-	localAddr := s.RemoteConn.RemoteAddr().(*net.TCPAddr)
+	localAddr := conn.RemoteAddr().(*net.TCPAddr)
 	var localIP []byte
 	var localAddrType uint8
 	if ip := localAddr.IP.To4(); ip != nil {
@@ -253,72 +323,35 @@ func (s *Socks5) ConnectReply() error {
 		localAddrType = addrTypeDomain
 	}
 	log.Println(localAddr, len(localAddr.IP))
-	_, err = s.Conn.Write([]byte{req.Version, 0, req.Reverse, localAddrType})
+	_, err = input.Write([]byte{req.Version, 0, req.Reverse, localAddrType})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	switch localAddrType {
 	case addrTypeIPv4, addrTypeIPv6:
 	case addrTypeDomain:
-		_, err = s.Conn.Write([]byte{uint8(len(localIP))})
+		_, err = input.Write([]byte{uint8(len(localIP))})
 		if err != nil {
-			return err
+			return nil, err
 		}
 	default:
-		return UnknownAddrType
+		return nil, UnknownAddrType
 	}
-	_, err = s.Conn.Write(localIP)
+	_, err = input.Write(localIP)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	err = binary.Write(s.Conn, binary.BigEndian, uint16(localAddr.Port))
+	err = binary.Write(input, binary.BigEndian, uint16(localAddr.Port))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
-}
-
-func (s *Socks5) Transport() {
-	log.Println("start transport", s.Conn.RemoteAddr(), s.RemoteConn.RemoteAddr())
-	var wg sync.WaitGroup
-
-	c := func(src, dst net.Conn) {
-		defer wg.Done()
-		io.Copy(dst, src)
-		dst.Close()
-	}
-
-	wg.Add(2)
-	go c(s.Conn, s.RemoteConn)
-	go c(s.RemoteConn, s.Conn)
-	wg.Wait()
-}
-
-func (s *Socks5) Service() {
-	defer s.Close()
-	err := s.HandshakeReply()
-	if err != nil {
-		log.Printf("handshake %v", err)
-		return
-	}
-	err = s.ConnectReply()
-	if err != nil {
-		log.Printf("connect %v", err)
-		return
-	}
-	s.Transport()
-}
-
-func (s *Socks5) Close() {
-	if s.Conn != nil {
-		s.Conn.Close()
-	}
-	if s.RemoteConn != nil {
-		s.RemoteConn.Close()
-	}
-	log.Println("close socket")
+	return conn, nil
 }
 
 func init() {
-	somersault.RegisteConnector("socks5", New)
+	config := &Config{
+		Network: "tcp",
+		Reverse: 0,
+	}
+	pipeline.RegistePipelineCreator("socks5", config)
 }

@@ -1,17 +1,18 @@
 package socks5
 
 import (
-	"net"
 	"sync"
+
+	"github.com/gchange/somersault/somersault/pipeline"
 )
 
 var (
-	authMethods = map[uint8]func(conn net.Conn) error {}
-	authReplyMethods = map[uint8]func(conn net.Conn) error{}
-	authMethodLock = sync.RWMutex{}
+	authMethods      = map[uint8]func(pipeline.Pipeline) error{}
+	authReplyMethods = map[uint8]func(pipeline.Pipeline) error{}
+	authMethodLock   = sync.RWMutex{}
 )
 
-func registeAuthMethod(method uint8, f func(conn net.Conn) error) error {
+func registeAuthMethod(method uint8, f func(pipeline.Pipeline) error) error {
 	authMethodLock.Lock()
 	defer authMethodLock.Unlock()
 	if _, ok := authMethods[method]; ok {
@@ -21,7 +22,7 @@ func registeAuthMethod(method uint8, f func(conn net.Conn) error) error {
 	return nil
 }
 
-func getAuthMethod(method uint8) func(conn net.Conn) error {
+func getAuthMethod(method uint8) func(pipeline.Pipeline) error {
 	authMethodLock.RLock()
 	defer authMethodLock.RUnlock()
 	if f, ok := authMethods[method]; ok {
@@ -40,7 +41,7 @@ func getSupportAuthMethod() []uint8 {
 	return methods
 }
 
-func registeAuthReplyMethod(method uint8, f func(conn net.Conn) error) error {
+func registeAuthReplyMethod(method uint8, f func(pipeline.Pipeline) error) error {
 	authMethodLock.Lock()
 	defer authMethodLock.Unlock()
 	if _, ok := authReplyMethods[method]; ok {
@@ -50,7 +51,7 @@ func registeAuthReplyMethod(method uint8, f func(conn net.Conn) error) error {
 	return nil
 }
 
-func getAuthReplyMethod(method uint8) func(conn net.Conn) error {
+func getAuthReplyMethod(method uint8) func(pipeline.Pipeline) error {
 	authMethodLock.RLock()
 	defer authMethodLock.RUnlock()
 	if f, ok := authReplyMethods[method]; ok {
@@ -59,7 +60,7 @@ func getAuthReplyMethod(method uint8) func(conn net.Conn) error {
 	return nil
 }
 
-func noAuth(_ net.Conn) error {
+func noAuth(_ pipeline.Pipeline) error {
 	return nil
 }
 
